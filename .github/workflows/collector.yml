@@ -1,0 +1,37 @@
+name: Proxy Collector
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 */6 * * *' # Run every 6 hours
+
+jobs:
+  collect-proxies:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Go Environment
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache: true
+
+      - name: Run Proxy Collector
+        run: go run ./cmd/proxy-collector
+
+      - name: Commit and Push valid_proxies.txt
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add valid_proxies.txt
+          
+          if git diff --staged --quiet; then
+            echo "No changes to commit."
+          else
+            git commit -m "chore: update valid public proxies [skip ci]"
+            git push
+          fi
