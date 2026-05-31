@@ -20,6 +20,10 @@ type PoolStats struct {
 
 // RunWorkerPool consumes the deduplicated proxies, tests them concurrently, and gathers valid proxies
 func RunWorkerPool(ctx context.Context, proxies []string) ([]models.Proxy, *PoolStats) {
+	// Create a Cancellable context to trigger an early exit
+	poolCtx, poolCancel := context.WithCancel(ctx)
+	defer poolCancel() // Ensure cleanup
+
 	jobs := make(chan string, len(proxies))
 	results := make(chan models.Proxy, len(proxies))
 	var wg sync.WaitGroup
@@ -33,23 +37,30 @@ func RunWorkerPool(ctx context.Context, proxies []string) ([]models.Proxy, *Pool
 		go func() {
 			defer wg.Done()
 			for proxyAddr := range jobs {
-				// Stop processing if context gets cancelled
-				if ctx.Err() != nil {
+				// Stop processing immediately if context gets cancelled (e.g., target reached)
+				if poolCtx.Err() != nil {
 					return
 				}
 
 				atomic.AddInt32(&stats.Tested, 1)
 
-				// Give each test isolation with a quick timeout block
-				testCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+				// Give each test isolation, tied to the parent poolCtx so it instantly aborts on Early Exit
+				testCtx, cancelTest := context.WithTimeout(poolCtx, 15*time.Second)
 				validProxy, err := ValidateProxy(testCtx, proxyAddr)
-				cancel()
+				cancelTest()
 
 				if err == nil {
-					atomic.AddInt32(&stats.Passed, 1)
+					passedCount := atomic.AddInt32(&stats.Passed, 1)
 					logger.Success("Proxy %s Passed! Speed: %.2f KB/s, Latency: %dms",
 						validProxy.Address, validProxy.Speed, validProxy.Latency.Milliseconds())
+					
 					results <- validProxy
+
+					// EARLY EXIT TRIGGER: Stop as soon as we hit the max requested amount
+					if passedCount >= int32(config.MaxOutputCount) {
+						logger.Info("Reached target of %d valid proxies! Stopping workers early...", config.MaxOutputCount)
+						poolCancel() // This instantly halts all other running and pending tests
+					}
 				} else {
 					atomic.AddInt32(&stats.Failed, 1)
 				}
@@ -63,11 +74,16 @@ func RunWorkerPool(ctx context.Context, proxies []string) ([]models.Proxy, *Pool
 		}()
 	}
 
-	// Feed jobs
-	for _, p := range proxies {
-		jobs <- p
-	}
-	close(jobs)
+	// Feed jobs in a separate goroutine so we can abort feeding if we reach our target early
+	go func() {
+		for _, p := range proxies {
+			if poolCtx.Err() != nil {
+				break // Stop sending jobs to the channel if we cancelled early
+			}
+			jobs <- p
+		}
+		close(jobs)
+	}()
 
 	// Wait for workers in background and close results
 	go func() {
