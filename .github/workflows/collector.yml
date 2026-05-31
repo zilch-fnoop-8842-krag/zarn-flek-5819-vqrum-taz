@@ -8,25 +8,40 @@ on:
 jobs:
   collect-proxies:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     steps:
-      - name: Checkout Repository
+      # 1. Checkout the source repository (this repo)
+      - name: Checkout Source Repository
         uses: actions/checkout@v4
 
+      # 2. Setup Go
       - name: Setup Go Environment
         uses: actions/setup-go@v5
         with:
           go-version: '1.24'
           cache: true
 
+      # 3. Run the Go script (generates valid_proxies.txt in current dir)
       - name: Run Proxy Collector
         run: go run ./cmd/proxy-collector
 
-      - name: Commit and Push valid_proxies.txt
+      # 4. Checkout the target repository into a sub-folder
+      - name: Checkout Target Repository
+        uses: actions/checkout@v4
+        with:
+          repository: zilch-fnoop-8842-krag/glorf-nibz-7724-xqpto-muv
+          token: ${{ secrets.TARGET_REPO_PAT }}
+          path: target-repo
+
+      # 5. Copy the file to the target repo and push
+      - name: Commit and Push to Target Repository
         run: |
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          # Overwrite the file in the target repository
+          cp valid_proxies.txt target-repo/valid_proxies.txt
+          
+          # Navigate into target repo to commit and push
+          cd target-repo
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
           git add valid_proxies.txt
           
           if git diff --staged --quiet; then
