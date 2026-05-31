@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"regexp"
 	"sync"
+	"time"
 
 	"github.com/proxy-collector/internal/logger"
 )
@@ -80,8 +81,8 @@ func fetchSource(ctx context.Context, url string, out chan<- string) {
 		return
 	}
 
-	// Quick timeout for fetches
-	client := &http.Client{Timeout: 10 * http.Second}
+	// Quick timeout for fetches (FIXED: time.Second)
+	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil || resp.StatusCode != 200 {
 		logger.Warn("Failed to fetch source: %s", url)
