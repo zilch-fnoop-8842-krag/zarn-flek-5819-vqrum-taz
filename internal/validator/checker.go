@@ -2,6 +2,7 @@ package validator
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
@@ -19,36 +20,24 @@ import (
 func ValidateProxy(ctx context.Context, proxyAddr string) (models.Proxy, error) {
 	proxyInfo := models.Proxy{Address: proxyAddr}
 
-	// Stage 1: TCP Connectivity & Latency Check
+	// Stage 1: TCP Connectivity Check (Fail-fast before protocol testing)
 	latency, err := testTCP(proxyAddr)
 	if err != nil {
 		return proxyInfo, errors.New("TCP test failed")
 	}
 	proxyInfo.Latency = latency
 
-	// Stage 2: HTTPS Request Test to determine proxy type and fetch country
-	proxyType := "socks5"
-	client := buildProxyClient(proxyAddr, proxyType)
-	country, err := testProtocol(ctx, client, config.HTTPSTargets)
-	
+	// Stage 2: Concurrent Protocol Detection (HTTP, HTTPS, SOCKS5) & Country Fetch
+	proxyType, client, country, err := detectProtocol(ctx, proxyAddr)
 	if err != nil {
-		proxyType = "http"
-		client = buildProxyClient(proxyAddr, proxyType)
-		country, err = testProtocol(ctx, client, config.HTTPSTargets)
-	}
-
-	if err != nil {
-		return proxyInfo, errors.New("HTTPS test failed for both protocols")
+		return proxyInfo, errors.New("protocol detection failed")
 	}
 
 	proxyInfo.Type = proxyType
-	proxyInfo.Country = "Unknown"
-	if country != "" {
-		proxyInfo.Country = country
-	}
+	proxyInfo.Country = country
 
-	// Stage 3: HTTP Request Test
-	if _, err := testProtocol(ctx, client, config.HTTPTargets); err != nil {
+	// Stage 3: Standard HTTP Request Test
+	if err := testProtocol(ctx, client, config.HTTPTargets); err != nil {
 		return proxyInfo, errors.New("HTTP test failed")
 	}
 
@@ -84,45 +73,98 @@ func testTCP(address string) (time.Duration, error) {
 	return time.Since(start), nil
 }
 
-func testProtocol(ctx context.Context, client *http.Client, targets []string) (string, error) {
-	country := "Unknown"
+// detectProtocol tests HTTP, HTTPS, and SOCKS5 concurrently. 
+// The first one to succeed wins, instantly cancelling the others.
+func detectProtocol(ctx context.Context, proxyAddr string) (string, *http.Client, string, error) {
+	detectCtx, cancel := context.WithCancel(ctx)
+	defer cancel() // Automatically kills remaining pending requests once one finishes
+
+	type result struct {
+		pType   string
+		client  *http.Client
+		country string
+		err     error
+	}
+
+	// 3 protocols to test
+	resChan := make(chan result, 3)
+
+	check := func(pType string) {
+		client := buildProxyClient(proxyAddr, pType)
+		target := config.HTTPSTargets[0] // highly reliable target (e.g., Cloudflare trace)
+
+		req, _ := http.NewRequestWithContext(detectCtx, "GET", target, nil)
+		req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+
+		resp, err := client.Do(req)
+		if err != nil {
+			resChan <- result{pType: pType, err: err}
+			return
+		}
+
+		body, _ := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+
+		if resp.StatusCode >= 200 && resp.StatusCode < 400 {
+			country := "Unknown"
+			bodyStr := string(body)
+			if strings.Contains(target, "cloudflare.com") {
+				for _, line := range strings.Split(bodyStr, "\n") {
+					if strings.HasPrefix(line, "loc=") {
+						country = strings.TrimPrefix(line, "loc=")
+						break
+					}
+				}
+			}
+			resChan <- result{pType: pType, client: client, country: country, err: nil}
+			return
+		}
+		resChan <- result{pType: pType, err: fmt.Errorf("bad status %d", resp.StatusCode)}
+	}
+
+	// Launch concurrency for all 3 protocols
+	go check("http")
+	go check("https")
+	go check("socks5")
+
+	// Wait for the first successful result
+	for i := 0; i < 3; i++ {
+		res := <-resChan
+		if res.err == nil {
+			return res.pType, res.client, res.country, nil
+		}
+	}
+
+	return "", nil, "", errors.New("all protocols failed")
+}
+
+func testProtocol(ctx context.Context, client *http.Client, targets []string) error {
 	for _, target := range targets {
 		req, _ := http.NewRequestWithContext(ctx, "GET", target, nil)
 		req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-		
+
 		resp, err := client.Do(req)
 		if err == nil {
-			body, _ := io.ReadAll(resp.Body)
 			_ = resp.Body.Close()
 			if resp.StatusCode >= 200 && resp.StatusCode < 400 {
-				bodyStr := string(body)
-				if strings.Contains(target, "cloudflare.com") {
-					for _, line := range strings.Split(bodyStr, "\n") {
-						if strings.HasPrefix(line, "loc=") {
-							country = strings.TrimPrefix(line, "loc=")
-							break
-						}
-					}
-				}
-				return country, nil
+				return nil
 			}
 		}
 	}
-	return "", errors.New("all targets failed")
+	return errors.New("all targets failed")
 }
 
 func testSpecificSites(ctx context.Context, client *http.Client, targets []string) error {
 	for _, target := range targets {
 		req, _ := http.NewRequestWithContext(ctx, "GET", target, nil)
-		// Many sites reject default backend request user agents
 		req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36")
-		
+
 		resp, err := client.Do(req)
 		if err != nil {
 			return fmt.Errorf("failed to reach %s", target)
 		}
 		_ = resp.Body.Close()
-		
+
 		if resp.StatusCode >= 400 {
 			return fmt.Errorf("target %s returned status %d", target, resp.StatusCode)
 		}
@@ -134,14 +176,13 @@ func testSpeed(ctx context.Context, client *http.Client, targets []string) (floa
 	for _, target := range targets {
 		req, _ := http.NewRequestWithContext(ctx, "GET", target, nil)
 		req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-		
+
 		start := time.Now()
 		resp, err := client.Do(req)
 		if err != nil {
-			continue // Try next target
+			continue
 		}
 
-		// Use limit reader to only read exactly what we want if content is unexpectedly large
 		written, err := io.Copy(io.Discard, resp.Body)
 		_ = resp.Body.Close()
 
@@ -156,21 +197,22 @@ func testSpeed(ctx context.Context, client *http.Client, targets []string) (floa
 }
 
 func buildProxyClient(proxyAddr, proxyType string) *http.Client {
-	var proxyURL *url.URL
-	if proxyType == "socks5" {
-		proxyURL, _ = url.Parse("socks5://" + proxyAddr)
-	} else {
-		proxyURL, _ = url.Parse("http://" + proxyAddr)
-	}
+	// Dynamically build scheme: http://, https://, or socks5://
+	proxyURL, _ := url.Parse(fmt.Sprintf("%s://%s", proxyType, proxyAddr))
 
 	transport := &http.Transport{
 		Proxy: http.ProxyURL(proxyURL),
 		DialContext: (&net.Dialer{
 			Timeout:   config.ConnectTimeout,
-			KeepAlive: 0, // Disabled keep-alives to preserve resources during mass tests
+			KeepAlive: 0,
 		}).DialContext,
 		TLSHandshakeTimeout: config.ConnectTimeout,
 		DisableKeepAlives:   true,
+		// REQUIRED for HTTPS Proxies: 
+		// Skips IP-based Certificate hostname mismatch verification
+		TLSClientConfig: &tls.Config{
+			InsecureSkipVerify: true,
+		},
 	}
 
 	return &http.Client{
