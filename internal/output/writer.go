@@ -46,7 +46,7 @@ func ProcessAndSave(valid []models.Proxy, stats *validator.PoolStats, duplicates
 		avgLatency = totalLatencyMs / float64(len(valid))
 	}
 
-	// 4. Save to valid_proxies.txt (Clean IP:PORT format)
+	// 4. Save to valid_proxies.txt
 	file, err := os.Create("valid_proxies.txt")
 	if err != nil {
 		logger.Error("Failed to create output file: %v", err)
@@ -55,7 +55,8 @@ func ProcessAndSave(valid []models.Proxy, stats *validator.PoolStats, duplicates
 	defer file.Close()
 
 	for _, p := range valid {
-		file.WriteString(fmt.Sprintf("%s\n", p.Address))
+		// Output with scheme natively prepended (e.g. socks5://1.2.3.4:8080)
+		file.WriteString(fmt.Sprintf("%s://%s\n", p.Protocol, p.Address))
 	}
 
 	// 5. Print Final Statistics Block
