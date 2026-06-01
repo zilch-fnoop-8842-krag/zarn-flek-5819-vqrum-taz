@@ -33,6 +33,12 @@ var (
 		"https://1.1.1.1",
 	}
 
+	// Specific sites to ensure the proxies can reliably access
+	SpecificTargets = []string{
+		"https://telegram.org",
+		"https://www.youtube.com",
+	}
+
 	SpeedTargets = []string{
 		// 2MB file. To download this within 8 seconds TestTimeout, it must be >250 KB/s minimum.
 		// Enforcing our 500 KB/s check in the code guarantees quality.
