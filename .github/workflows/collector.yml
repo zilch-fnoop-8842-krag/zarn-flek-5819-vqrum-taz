@@ -2,8 +2,6 @@ name: Proxy Collector
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: '0 */6 * * *' # Run every 6 hours
 
 jobs:
   collect-proxies:
