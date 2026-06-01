@@ -11,7 +11,7 @@ import (
 	"github.com/proxy-collector/internal/logger"
 )
 
-// List of dozens of public proxy endpoints (HTTP and SOCKS5)
+// Expanded proxySources to target public lists representing HTTP, HTTPS, and SOCKS5.
 var proxySources = []string{
 	// HTTP
 	"https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/http.txt",
@@ -29,18 +29,19 @@ var proxySources = []string{
 	"https://raw.githubusercontent.com/ErcinDedeoglu/proxies/main/proxies/http.txt",
 	"https://raw.githubusercontent.com/vakhov/free-proxy-list/main/proxies/http.txt",
 	"https://api.proxyscrape.com/v2/?request=getproxies&protocol=http&timeout=10000&country=all&ssl=all&anonymity=all",
-
+	
 	// SOCKS5
 	"https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/socks5.txt",
 	"https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/socks5.txt",
 	"https://raw.githubusercontent.com/ShiftyTR/Proxy-List/master/socks5.txt",
 	"https://raw.githubusercontent.com/roosterkid/openproxylist/main/SOCKS5_RAW.txt",
-	"https://raw.githubusercontent.com/rdavydov/proxy-list/main/proxies/socks5.txt",
 	"https://raw.githubusercontent.com/proxifly/free-proxy-list/main/proxies/protocols/socks5/data.txt",
 	"https://raw.githubusercontent.com/jetkai/proxy-list/main/online-proxies/txt/proxies-socks5.txt",
-	"https://raw.githubusercontent.com/Zaeem20/FREE_PROXIES_LIST/master/socks5.txt",
 	"https://raw.githubusercontent.com/vakhov/free-proxy-list/main/proxies/socks5.txt",
 	"https://api.proxyscrape.com/v2/?request=getproxies&protocol=socks5&timeout=10000&country=all&ssl=all&anonymity=all",
+
+	// HTTPS Explicit
+	"https://raw.githubusercontent.com/proxifly/free-proxy-list/main/proxies/protocols/https/data.txt",
 }
 
 // Regex to accurately extract IP:PORT strings from noisy text blocks
@@ -94,7 +95,6 @@ func fetchSource(ctx context.Context, url string, out chan<- string) {
 		return
 	}
 
-	// Quick timeout for fetches
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil || resp.StatusCode != 200 {
