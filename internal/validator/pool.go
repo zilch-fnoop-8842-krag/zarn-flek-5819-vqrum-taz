@@ -2,6 +2,7 @@ package validator
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -45,14 +46,15 @@ func RunWorkerPool(ctx context.Context, proxies []string) ([]models.Proxy, *Pool
 				atomic.AddInt32(&stats.Tested, 1)
 
 				// Give each test isolation, tied to the parent poolCtx so it instantly aborts on Early Exit
-				testCtx, cancelTest := context.WithTimeout(poolCtx, 15*time.Second)
+				// Raised timeout to 35s accommodate the extra specific sites testing stage
+				testCtx, cancelTest := context.WithTimeout(poolCtx, 35*time.Second) 
 				validProxy, err := ValidateProxy(testCtx, proxyAddr)
 				cancelTest()
 
 				if err == nil {
 					passedCount := atomic.AddInt32(&stats.Passed, 1)
-					logger.Success("Proxy %s Passed! Speed: %.2f KB/s, Latency: %dms",
-						validProxy.Address, validProxy.Speed, validProxy.Latency.Milliseconds())
+					logger.Success("Proxy %s Passed! Type: %s, Country: %s, Latency: %dms, Speed: %.2f KB/s (%.2f MB/s)",
+						validProxy.Address, strings.ToUpper(validProxy.Type), validProxy.Country, validProxy.Latency.Milliseconds(), validProxy.Speed, validProxy.Speed/1024.0)
 					
 					results <- validProxy
 
