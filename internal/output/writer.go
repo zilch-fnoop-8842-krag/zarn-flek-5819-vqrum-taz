@@ -46,7 +46,7 @@ func ProcessAndSave(valid []models.Proxy, stats *validator.PoolStats, duplicates
 		avgLatency = totalLatencyMs / float64(len(valid))
 	}
 
-	// 4. Save to valid_proxies.txt
+	// 4. Save to valid_proxies.txt (Clean IP:PORT format)
 	file, err := os.Create("valid_proxies.txt")
 	if err != nil {
 		logger.Error("Failed to create output file: %v", err)
@@ -68,8 +68,8 @@ func ProcessAndSave(valid []models.Proxy, stats *validator.PoolStats, duplicates
 	fmt.Printf("Passed Validation  : %d\n", stats.Passed)
 	fmt.Printf("Saved to File      : %d\n", len(valid))
 	fmt.Println("-------------------------------------------")
-	fmt.Printf("Best Speed         : %.2f KB/s\n", bestSpeed)
-	fmt.Printf("Average Speed      : %.2f KB/s\n", avgSpeed)
+	fmt.Printf("Best Speed         : %.2f KB/s (%.2f MB/s)\n", bestSpeed, bestSpeed/1024.0)
+	fmt.Printf("Average Speed      : %.2f KB/s (%.2f MB/s)\n", avgSpeed, avgSpeed/1024.0)
 	fmt.Printf("Average Latency    : %.2f ms\n", avgLatency)
 	fmt.Printf("Total Elapsed Time : %.2f seconds\n", elapsed)
 	fmt.Println("===========================================")
