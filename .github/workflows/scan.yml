@@ -30,7 +30,6 @@ jobs:
       timeout-minutes: 180
       run: ./lightshot-scanner
 
-    # CRITICAL FIX: 'if: always()' ensures this runs even if the previous step times out
     - name: Upload found_images.txt artifact
       uses: actions/upload-artifact@v4
       if: always() 
