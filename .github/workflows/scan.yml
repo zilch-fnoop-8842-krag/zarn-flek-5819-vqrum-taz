@@ -20,8 +20,10 @@ jobs:
       with:
         go-version: '1.22'
 
-    - name: Download Go modules
-      run: go mod download
+    - name: Initialize and Download Go modules
+      run: |
+        go mod init lightshot-scanner || true
+        go mod tid
 
     - name: Build scanner
       run: go build -o lightshot-scanner .
