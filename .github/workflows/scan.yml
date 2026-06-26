@@ -22,7 +22,7 @@ jobs:
 
     - name: Initialize and Download Go modules
       run: |
-        go mod init lightshot-scanner || true
+        go mod init lightshot-scanner
         go mod tid
 
     - name: Build scanner
