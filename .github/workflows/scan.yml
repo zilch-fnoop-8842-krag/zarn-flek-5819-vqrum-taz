@@ -1,15 +1,18 @@
-name: YouTube Avatar Scanner
+name: Lightshot Scanner
 
 on:
-  workflow_dispatch: 
-  
+  workflow_dispatch:
+
 jobs:
   scan:
     runs-on: ubuntu-latest
-    timeout-minutes: 300
+
+    env:
+      PROXY_LIST_URL: https://raw.githubusercontent.com/zilch-fnoop-8842-krag/glorf-nibz-7724-xqpto-muv/refs/heads/flurbo-womplex-4491-zzyzx/valid_proxies.txt
+      CONCURRENCY: 100 
 
     steps:
-    - name: Checkout code
+    - name: Checkout repository
       uses: actions/checkout@v4
 
     - name: Set up Go
@@ -17,8 +20,20 @@ jobs:
       with:
         go-version: '1.22'
 
-    - name: Install dependencies
-      run: go get golang.org/x/net
+    - name: Download Go modules
+      run: go mod download
 
-    - name: Run Scanner
-      run: go run main.go
+    - name: Build scanner
+      run: go build -o lightshot-scanner .
+
+    - name: Run scanner
+      timeout-minutes: 180
+      run: ./lightshot-scanner
+
+    # CRITICAL FIX: 'if: always()' ensures this runs even if the previous step times out
+    - name: Upload found_images.txt artifact
+      uses: actions/upload-artifact@v4
+      if: always() 
+      with:
+        name: found-lightshot-images
+        path: found_images.txt
