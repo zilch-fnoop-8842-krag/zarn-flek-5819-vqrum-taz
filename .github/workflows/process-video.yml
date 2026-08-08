@@ -21,7 +21,6 @@ jobs:
       TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
       TELEGRAM_API_BASE_URL: ${{ vars.TELEGRAM_API_BASE_URL || 'https://api.telegram.org' }}
       REMUX_WITH_FFMPEG: ${{ vars.REMUX_WITH_FFMPEG || 'false' }}
-      RUNNER_TEMP: ${{ runner.temp }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
