@@ -10,21 +10,22 @@ on:
 
 jobs:
   process:
-    # Use ubuntu-latest with the public API for small files, or a self-hosted
-    # runner next to a persistent Local Bot API Server for files up to 1.5GB.
-    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     timeout-minutes: 120
     permissions:
       contents: read
     env:
       JOB_PAYLOAD: ${{ inputs.payload }}
       TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-      TELEGRAM_API_BASE_URL: ${{ vars.TELEGRAM_API_BASE_URL || 'https://api.telegram.org' }}
+      TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID }}
+      TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
       REMUX_WITH_FFMPEG: ${{ vars.REMUX_WITH_FFMPEG || 'false' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+      - name: Install MTProto Dependencies
+        run: npm install telegram
       - name: Process and send document
         run: node scripts/process-video.mjs
