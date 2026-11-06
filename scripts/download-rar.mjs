@@ -6,6 +6,7 @@ import path from 'node:path';
 
 const payload = JSON.parse(process.env.JOB_PAYLOAD ?? '{}');
 const token = process.env.TELEGRAM_BOT_TOKEN;
+// Local bot API server URL (running via deploy/telegram-bot-api.service)
 const apiBase = (process.env.TELEGRAM_API_BASE_URL || 'http://127.0.0.1:8081').replace(/\/$/, '');
 
 if (!token || !payload.fileId || !payload.fileName || !payload.chatId) {
@@ -28,12 +29,9 @@ async function callTelegram(method, body) {
   return data.result;
 }
 
-async function notify(text) {
-  await callTelegram('sendMessage', { chat_id: payload.chatId, text }).catch(console.error);
-}
-
 try {
-  console.log(`Resolving file_id: ${payload.fileId}...`);
+  console.log(`Requesting getFile for ${payload.fileId} from Local Bot API...`);
+  // Calling getFile against the LOCAL Bot API server (supports up to 2000 MB)
   const file = await callTelegram('getFile', { file_id: payload.fileId });
 
   if (!file.file_path) {
@@ -43,28 +41,33 @@ try {
   const safeName = path.basename(payload.fileName).replace(/[<>:"/\\|?*\u0000-\u001F]/g, '_');
   const targetPath = path.join(downloadDir, safeName);
 
-  // If using local Bot API server in --local mode, file is directly on disk
+  // When telegram-bot-api runs in --local mode, file_path is an absolute path on disk
   if (path.isAbsolute(file.file_path) && existsSync(file.file_path)) {
-    console.log(`Local mode detected. Copying directly from ${file.file_path} to ${targetPath}...`);
+    console.log(`Local file detected at ${file.file_path}. Copying to ${targetPath}...`);
     await copyFile(file.file_path, targetPath);
   } else {
-    // Stream download (supports up to 2GB)
+    // Or stream from local HTTP endpoint
     const downloadUrl = `${apiBase}/file/bot${token}/${file.file_path}`;
-    console.log(`Downloading from ${downloadUrl}...`);
+    console.log(`Downloading stream from ${downloadUrl}...`);
     const res = await fetch(downloadUrl);
-    if (!res.ok || !res.body) {
-      throw new Error(`HTTP ${res.status}: ${res.statusText}`);
-    }
+    if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}: ${res.statusText}`);
     await pipeline(Readable.fromWeb(res.body), createWriteStream(targetPath));
   }
 
-  const stats = await stat(targetPath);
-  const sizeMB = (stats.size / (1024 * 1024)).toFixed(2);
-  console.log(`Successfully saved ${safeName} (${sizeMB} MB) to ${targetPath}`);
+  const fileStats = await stat(targetPath);
+  const sizeMB = (fileStats.size / (1024 * 1024)).toFixed(2);
+  console.log(`Done! File saved: ${targetPath} (${sizeMB} MB)`);
 
-  await notify(`File \`${safeName}\` (${sizeMB} MB) successfully saved to \`downloads/\` folder in the repository!`);
+  await callTelegram('sendMessage', {
+    chat_id: payload.chatId,
+    text: `✅ File \`${safeName}\` (${sizeMB} MB) successfully downloaded and saved in repository root \`downloads/\` folder!`,
+    parse_mode: 'Markdown',
+  });
 } catch (error) {
-  console.error('Download failed:', error);
-  await notify(`Failed to save RAR file: ${error.message}`);
+  console.error('Download error:', error);
+  await callTelegram('sendMessage', {
+    chat_id: payload.chatId,
+    text: `❌ Download failed: ${error.message}`,
+  }).catch(() => {});
   process.exitCode = 1;
 }
