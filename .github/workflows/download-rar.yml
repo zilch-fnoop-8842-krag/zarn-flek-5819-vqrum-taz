@@ -12,39 +12,62 @@ permissions:
 
 jobs:
   download:
-    # Use self-hosted runner if local Telegram Bot API is on your server,
-    # or ubuntu-latest if your Bot API server is publicly reachable.
-    runs-on: self-hosted
+    # Runs directly on GitHub's hosted Ubuntu cloud runner
+    runs-on: ubuntu-latest
+
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
         with:
           lfs: true
+          fetch-depth: 0
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 20
 
+      # Spins up Local Telegram Bot API server in 3 seconds to bypass the 20MB limit
+      - name: Start Local Telegram Bot API Server
+        run: |
+          sudo mkdir -p /var/lib/telegram-bot-api
+          sudo chmod 777 /var/lib/telegram-bot-api
+
+          docker run -d \
+            --name telegram-bot-api \
+            -p 8081:8081 \
+            -v /var/lib/telegram-bot-api:/var/lib/telegram-bot-api \
+            aiogram/telegram-bot-api:latest \
+            --api-id="${{ secrets.TELEGRAM_API_ID }}" \
+            --api-hash="${{ secrets.TELEGRAM_API_HASH }}" \
+            --local \
+            --http-port=8081 \
+            --dir=/var/lib/telegram-bot-api
+
+          echo "Waiting for Telegram Local Bot API to become ready..."
+          until curl -s http://127.0.0.1:8081 > /dev/null; do
+            sleep 1
+          done
+          echo "Telegram Local Bot API is up and running on port 8081!"
+
       - name: Download & Save RAR File
         env:
           JOB_PAYLOAD: ${{ github.event.inputs.payload }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_API_BASE_URL: ${{ secrets.TELEGRAM_API_BASE_URL || 'http://127.0.0.1:8081' }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TELEGRAM_API_BASE_URL: 'http://127.0.0.1:8081'
         run: |
           node scripts/download-rar.mjs
 
-      - name: Commit to Repository using Git LFS
+      - name: Commit File to Repository with Git LFS
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          
-          # Initialize Git LFS for files >100MB
+
+          # Track RAR files with Git LFS so GitHub accepts files >100MB
           git lfs install
           git lfs track "downloads/**"
           git add .gitattributes
 
           git add downloads/
           git commit -m "Add RAR from Telegram: $(node -e "console.log(JSON.parse(process.env.JOB_PAYLOAD).fileName)")" || echo "No changes to commit"
-          git push
+          git push origin HEAD:${{ github.ref_name }}
