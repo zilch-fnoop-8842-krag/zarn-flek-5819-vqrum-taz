@@ -12,7 +12,6 @@ permissions:
 
 jobs:
   download:
-    # Runs directly on GitHub's hosted Ubuntu cloud runner
     runs-on: ubuntu-latest
 
     steps:
@@ -27,16 +26,25 @@ jobs:
         with:
           node-version: 20
 
-      # Spins up Local Telegram Bot API server in 3 seconds to bypass the 20MB limit
       - name: Start Local Telegram Bot API Server
         run: |
+          # 1. Validate secrets
+          if [ -z "${{ secrets.TELEGRAM_API_ID }}" ] || [ -z "${{ secrets.TELEGRAM_API_HASH }}" ]; then
+            echo "::error::Missing TELEGRAM_API_ID or TELEGRAM_API_HASH! Please add them to GitHub Repository Secrets."
+            exit 1
+          fi
+
           sudo mkdir -p /var/lib/telegram-bot-api
           sudo chmod 777 /var/lib/telegram-bot-api
 
+          # 2. Run container
           docker run -d \
             --name telegram-bot-api \
             -p 8081:8081 \
             -v /var/lib/telegram-bot-api:/var/lib/telegram-bot-api \
+            -e TELEGRAM_API_ID="${{ secrets.TELEGRAM_API_ID }}" \
+            -e TELEGRAM_API_HASH="${{ secrets.TELEGRAM_API_HASH }}" \
+            -e TELEGRAM_LOCAL=true \
             aiogram/telegram-bot-api:latest \
             --api-id="${{ secrets.TELEGRAM_API_ID }}" \
             --api-hash="${{ secrets.TELEGRAM_API_HASH }}" \
@@ -44,11 +52,27 @@ jobs:
             --http-port=8081 \
             --dir=/var/lib/telegram-bot-api
 
+          # 3. Watchdog: check health or dump crash log
           echo "Waiting for Telegram Local Bot API to become ready..."
-          until curl -s http://127.0.0.1:8081 > /dev/null; do
+          for i in {1..30}; do
+            if curl -s http://127.0.0.1:8081/ > /dev/null 2>&1; then
+              echo "Telegram Local Bot API is up and running on port 8081!"
+              exit 0
+            fi
+
+            # Check if container died in background
+            if [ "$(docker inspect -f '{{.State.Running}}' telegram-bot-api 2>/dev/null)" != "true" ]; then
+              echo "::error::Docker container crashed! Displaying container logs:"
+              docker logs telegram-bot-api
+              exit 1
+            fi
+
             sleep 1
           done
-          echo "Telegram Local Bot API is up and running on port 8081!"
+
+          echo "::error::Timed out waiting for port 8081."
+          docker logs telegram-bot-api
+          exit 1
 
       - name: Download & Save RAR File
         env:
@@ -63,7 +87,6 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
 
-          # Track RAR files with Git LFS so GitHub accepts files >100MB
           git lfs install
           git lfs track "downloads/**"
           git add .gitattributes
