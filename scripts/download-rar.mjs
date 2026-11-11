@@ -1,12 +1,15 @@
 import { createWriteStream, existsSync } from 'node:fs';
-import { copyFile, mkdir, stat } from 'node:fs/promises';
+import { mkdir, stat } from 'node:fs/promises';
 import { pipeline } from 'node:stream/promises';
 import { Readable } from 'node:stream';
+import { exec } from 'node:child_process';
+import { promisify } from 'node:util';
 import path from 'node:path';
+
+const execAsync = promisify(exec);
 
 const payload = JSON.parse(process.env.JOB_PAYLOAD ?? '{}');
 const token = process.env.TELEGRAM_BOT_TOKEN;
-// Local bot API server URL (running via deploy/telegram-bot-api.service)
 const apiBase = (process.env.TELEGRAM_API_BASE_URL || 'http://127.0.0.1:8081').replace(/\/$/, '');
 
 if (!token || !payload.fileId || !payload.fileName || !payload.chatId) {
@@ -31,7 +34,6 @@ async function callTelegram(method, body) {
 
 try {
   console.log(`Requesting getFile for ${payload.fileId} from Local Bot API...`);
-  // Calling getFile against the LOCAL Bot API server (supports up to 2000 MB)
   const file = await callTelegram('getFile', { file_id: payload.fileId });
 
   if (!file.file_path) {
@@ -41,16 +43,35 @@ try {
   const safeName = path.basename(payload.fileName).replace(/[<>:"/\\|?*\u0000-\u001F]/g, '_');
   const targetPath = path.join(downloadDir, safeName);
 
-  // When telegram-bot-api runs in --local mode, file_path is an absolute path on disk
-  if (path.isAbsolute(file.file_path) && existsSync(file.file_path)) {
-    console.log(`Local file detected at ${file.file_path}. Copying to ${targetPath}...`);
-    await copyFile(file.file_path, targetPath);
-  } else {
-    // Or stream from local HTTP endpoint
-    const downloadUrl = `${apiBase}/file/bot${token}/${file.file_path}`;
+  console.log(`Telegram local file path: ${file.file_path}`);
+
+  // 1. Try direct copy with sudo (bypasses Docker permissions and copies 2GB instantly)
+  let copied = false;
+  try {
+    console.log(`Copying via sudo: ${file.file_path} -> ${targetPath}...`);
+    await execAsync(`sudo cp "${file.file_path}" "${targetPath}"`);
+    // Ensure the runner user owns the file so git can commit it
+    await execAsync(`sudo chown $(id -u):$(id -g) "${targetPath}"`);
+    copied = true;
+    console.log(`Successfully copied directly from disk.`);
+  } catch (copyErr) {
+    console.warn(`Direct copy failed (${copyErr.message}). Falling back to HTTP stream...`);
+  }
+
+  // 2. Fallback: Stream via HTTP with corrected relative path
+  if (!copied) {
+    // Strip the local directory prefix so it forms a valid relative endpoint: 'documents/file_0'
+    const relativePath = file.file_path
+      .replace(/^\/?var\/lib\/telegram-bot-api\/[^\/]+\//, '')
+      .replace(/^\/+/, '');
+
+    const downloadUrl = `${apiBase}/file/bot${token}/${relativePath}`;
     console.log(`Downloading stream from ${downloadUrl}...`);
+
     const res = await fetch(downloadUrl);
-    if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+    if (!res.ok || !res.body) {
+      throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+    }
     await pipeline(Readable.fromWeb(res.body), createWriteStream(targetPath));
   }
 
@@ -60,7 +81,7 @@ try {
 
   await callTelegram('sendMessage', {
     chat_id: payload.chatId,
-    text: `✅ File \`${safeName}\` (${sizeMB} MB) successfully downloaded and saved in repository root \`downloads/\` folder!`,
+    text: `✅ File \`${safeName}\` (${sizeMB} MB) successfully saved in repository root \`downloads/\` folder!`,
     parse_mode: 'Markdown',
   });
 } catch (error) {
